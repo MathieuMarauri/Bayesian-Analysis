@@ -1,0 +1,14 @@
+# R specific files
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Mac specific files
+.DS_Store
+
+# HTML output files
+.html
+
+# Cache folders
+markdown/cache
