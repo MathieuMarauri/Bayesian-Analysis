@@ -8,7 +8,10 @@
 .DS_Store
 
 # HTML output files
-.html
+*.html
 
 # Cache folders
 markdown/cache
+
+# Test file
+src/test.R
