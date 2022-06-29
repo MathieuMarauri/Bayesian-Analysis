@@ -1,0 +1,246 @@
+---
+title: "Bayesian optimisation"
+output:
+  html_document:
+    theme: readable
+    highlight: tango
+---
+
+```{r initial_chunk, echo = FALSE, warning = FALSE, message = FALSE}
+library("knitr")
+opts_chunk$set(echo = FALSE, eval = TRUE, warning = FALSE, message = FALSE, cache = FALSE, fig.align = 'center', dpi = 300, out.width = '75%')
+```
+
+```{r set-up}
+library("ggplot2") # data visualisation
+library("GPfit") # Gaussian Process fit
+library("tensorflow") # tensorflow API to use Adam Optimizer
+source("../src/helpers.R")
+
+# Set default ggplot theme
+theme_set(
+  theme_light(
+  base_size = 20
+  ) +
+  theme(
+    text = element_text(family = "Gibson", colour = "gray10"),
+    panel.border = element_blank(),
+    axis.line = element_line(colour = "gray50", size = .5),
+    axis.ticks = element_blank(),
+    strip.background = element_rect(colour = "gray50", fill = "transparent", size = .7),
+    strip.text.x = element_text(colour = "gray10"),
+    legend.key.size = unit(2, "cm")
+  )
+)
+```
+
+# Introduction
+
+Finding the optimum of a function can be tricky. If the function's analytical form is known and it is differentiable then everything is (almost) fine and one could use gradient descent to find the optimal value. When the function's analytical form is unknown, when it is a black-box function (think supervised learning) or a known function that takes long time to be evaluated on a single point, *bayesian optimisation* is the way to go.
+
+The following is heavily inspired by the excellent post [*A tutorial on Bayesian optimization in R*](https://bearloga.github.io/bayesopt-tutorial-r/) by [Mikhail Popov](https://bearloga.github.io/).
+
+The bayesian optimisation algorithm can be divided into 2 parts:
+
+* a gaussian process to approximates the function
+* an acquisition function to decide where is the next point to evaluate
+
+Both will be explained in more details in subsequent sections.
+
+# Baseline
+
+Through out this document the following function will be used as our objective function to minimise:
+
+$$
+f(x) = \left( 6x - 2 \right)^2 \sin\left( 12x - 4 \right)
+$$
+
+```{r obj-func, fig.cap=glue::glue("Objective function. The minimum value {round(min, digits = 3)} is obtained at x = {round(arg_min, digits = 3)}")}
+x <- seq(0, 1, length.out = 100000)
+f <- function(x) (6 * x - 2)^2 * sin(12 * x - 4)
+f_x <- f(x)
+arg_min <- x[which.min(f_x)]
+min <- min(f_x)
+ggplot(
+  data = data.frame(x = x, y = f(x)),
+  mapping = aes(x, y)
+) +
+  geom_line() + 
+  geom_point(
+    mapping = aes(x = arg_min, y = min),
+    color = "red",
+    size = 3
+  ) +
+  labs(
+    y = "f(x)"
+  )
+```
+
+As the function can be easily evaluated, a way to find the global minimum would be to use gradient descent and [Adam optimizer from tensorflow](https://www.tensorflow.org/api_docs/python/tf/keras/optimizers/Adam). 
+
+```{r adam-optim}
+# Define the tf session
+sess <- tf$Session()
+
+# Define a trainable variable
+x <- tf$Variable(0.0, trainable = TRUE)
+
+# Define the objective function using tensorflow sinus
+f_tensor <- function(x) (6 * x - 2)^2 * tf$sin(12 * x - 4)
+
+# Train the Adam optimizer on f
+adam <- tf$train$AdamOptimizer(learning_rate = 0.3)
+f_x <- f_tensor(x)
+opt <- adam$minimize(f_x, var_list = x)
+
+# Store the value of x and f(x) at each iteration
+sess$run(tf$global_variables_initializer())
+n_iter <- 30
+arg_min <- vector(mode = "numeric", length = n_iter)
+min <- vector(mode = "numeric", length = n_iter)
+for (i in 1:n_iter) {
+  sess$run(opt)
+  arg_min[i] <- sess$run(x)
+  min[i] <- sess$run(f_x)
+}
+```
+
+<div style="text-align:center">
+<img src="../output/adam.gif" alt="adam optim steps" width="75%"/>
+</div>
+
+The optimum is found to be at x = `r round(arg_min[which.min(min)], digits = 3)` for a value of `r round(min(min), digits = 3)`, 30 iterations have been used.
+
+# The bayesian optimisation algorithm
+
+The macro pseudo-code of the bayesian optimisation algorithm is as follows
+
+```{r bayes-opt-pseudo-code, tidy = FALSE, eval = FALSE, highlight = FALSE, echo = TRUE}
+Objectives: find the min and arg min of the function f
+Inputs: x in some interval
+
+Fit a gaussian distribution on f
+Sample f at n0 initial points
+Set n = n0
+while n ≤ N do:
+  Update the gaussian posterior distribution on f with the n evaluations of f done so far
+  Compute the acquisition function over the x values using the posterior distribution of the gaussian process
+  Let x* be the value which maximizes the acquisition function
+  Evaluate f at x*
+  n++
+end while
+Return x for which f(x) is minimum
+```
+
+# The Gaussian process
+
+TODO full description with pseudo code and examples.
+See [this article](https://distill.pub/2019/visual-exploration-gaussian-processes/).
+
+First set up a prior using a kernel (covariance matrix) that define the links between points (TODO from continuous to discrete). From this prior it is possible to draw random samples (a random sample is a set of points that respect the covariance matrix => if periodic it means that some sample are highly improbable since they don't respect the way points are linked together)
+
+Posterior: compute covariance matrix for train and test, condition on train to have distribution on the test points, then marginalisation on each dimension to compute mean and sd => final posterior distribution as seen in graph. 
+
+
+# The acquisition function
+
+The gaussian process approximates the function and the posterior distribution is computed using new function evaluations. The question that arrises then is, how to choose the next point where to evaluate the model so that it leads to find the optimum quickly? Acquisition functions answer that question.
+
+Let's say we have already evaluated $f$ on $n$ points. The minimal value observed so far is $y_{best}$ and the corresponding $x$ value is $x_{best}$. We want to find the next $x$ value where there is the most chance to have $f(x) \leq y_{best}$.
+
+Different acquisition functions have been proposed:
+
+* Probability of improvement: it is simply a measure of the probability that a point $x$ will lead to a better $y$ value.
+* Expected improvement: quantify the expected amount of improvement at each point.
+* Gaussian process lower confidence bound: TODO
+
+## Probability of improvement
+
+Probability of improvement is defined by the following expression:
+
+$$
+PI(x) = \Phi\left( \frac{y_{best} - \mu(x)}{\sigma(x)}\right)
+$$
+where $\Phi$ is the normal [cumulative distribution function](https://en.wikipedia.org/wiki/Cumulative_distribution_function). It simply is $P(f(x) \leq y_{best})$. $\mu(x)$ and $\sigma(x)$ are used to standardise the variable so the standard normal cumulative distribution function can be used. 
+
+Consider our gaussian process with 4 evaluations done at evenly spaced points.
+
+```{r pi_gp, fig.cap = "Posterior gaussian process with 4 evaluations at evenly spaced points. Of course different points would lead to a different posterior."}
+init_eval <- data.frame(x = seq(0, 1, length.out = 4), y = f(seq(0, 1, length.out = 4)))
+fit <- GP_fit(
+  X = init_eval[, "x"],
+  Y = init_eval[, "y"],
+  corr = list(type = "exponential", power = 1.95)
+)
+
+# Update the GP with new data
+x_new <- seq(0, 1, length.out = 100)
+pred <- predict.GP(fit, xnew = data.frame(x = x_new))
+mu <- pred$Y_hat
+sigma <- sqrt(pred$MSE)
+
+x <- seq(0, 1, length.out = 100000)
+f <- function(x) (6 * x - 2)^2 * sin(12 * x - 4)
+
+# Visualise the posterior GP
+ggplot(
+  data = data.frame(x = x_new, y = mu, se_lower = mu - sigma, se_upper = mu + sigma)
+) +
+  geom_line(
+    mapping = aes(x = x, y = y, linetype = "dashed"),
+    # linetype = "dashed",
+    show.legend = TRUE
+  ) +
+  geom_ribbon(
+    mapping = aes(x = x, ymin = se_lower, ymax = se_upper),
+    alpha = .7
+  ) +
+  geom_point(
+    data = init_eval,
+    mapping = aes(x = x, y = y),
+    show.legend = TRUE
+  ) + 
+  geom_line(
+    data = data.frame(x = x, y = f(x)),
+    mapping = aes(x = x, y = y),
+    show.legend = TRUE
+  ) + 
+  scale_linetype_identity() +
+  labs(
+    y = "f(x)"
+  )
+```
+
+Now based on this posterior distribution the acquisition function can be computed as each value $x$. Several things should be noticed about the acquisition function: 
+
+* Of course $PI(x)$ is bounded by 0 and 1 as it is a probability.
+* At the point where the objective function has already been evaluated, the probability of improvement is null. This makes complete sense as the value at those point is already known so there is no chance of finding a lower value at those points.
+* The next point where the objective function will be evaluated is the $argmax$ of the acquisition function (ties are selected at random).
+
+```{r pi_acquisition, fig.cap = "Acquisition function using the probability of improvement to select the next best point."}
+y_best <- min(init_eval$y)
+probability_improvement <- purrr::map2_dbl(mu, sigma, function(m, s) {
+  if (s == 0) return(0)
+  else {
+    poi <- pnorm((y_best - m) / s) # if the objective is to maximise then use 1 - poi
+    return(poi)
+  }
+})
+
+# Visualise the poi
+ggplot(
+  data = data.frame(x = x_new, y = probability_improvement),
+  mapping = aes(x = x, y = y)
+) +
+  geom_line()
+```
+
+
+
+
+
+
+
+<br>
+
+<cite> -- Mathieu Marauri</cite>

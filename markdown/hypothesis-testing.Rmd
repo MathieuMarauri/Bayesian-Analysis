@@ -1,0 +1,334 @@
+---
+title: "Estimation"
+output:
+  html_document:
+    theme: readable
+    highlight: tango
+---
+
+```{r initial_chunk, echo = FALSE, warning = FALSE, message = FALSE}
+library("knitr")
+opts_chunk$set(echo = FALSE, eval = TRUE, warning = FALSE, message = FALSE, cache = FALSE, fig.align = 'center', dpi = 300, out.width = '75%')
+```
+
+```{r set-up}
+library("ggplot2") # data visualisation
+library("gridExtra") # arrange plot in grid
+library("magrittr") # pipe operators
+
+# Set default ggplot theme
+theme_set(
+  theme_light(
+  base_size = 20
+  ) +
+  theme(
+    text = element_text(family = "Gibson", colour = "gray10"),
+    panel.border = element_blank(),
+    axis.line = element_line(colour = "gray50", size = .5),
+    axis.ticks = element_blank(),
+    strip.background = element_rect(colour = "gray50", fill = "transparent", size = .7),
+    strip.text.x = element_text(colour = "gray10"),
+    legend.key.size = unit(2, "cm")
+  )
+)
+
+# Set default color
+default_base_color <- rgb(73, 139, 245, maxColorValue = 255)
+new_geom_defaults <- list(
+  # Geoms that only require a default colour.
+  list(geom = "abline", new = list(colour = default_base_color)),
+  list(geom = "point", new = list(colour = default_base_color)),
+  list(geom = "density", new = list(colour = default_base_color)),
+  list(geom = "errorbar", new = list(colour = default_base_color)),
+  list(geom = "errorbarh", new = list(colour = default_base_color)),
+  list(geom = "hline", new = list(colour = default_base_color)),
+  list(geom = "vline", new = list(colour = default_base_color)),
+  list(geom = "line", new = list(colour = default_base_color)),
+  list(geom = "text", new = list(colour = "black")),
+  # Geoms that only require a default fill.
+  list(geom = "area", new = list(fill = default_base_color, colour = default_base_color, alpha = .7)),
+  list(geom = "ribbon", new = list(fill = default_base_color)),
+  list(geom = "bar", new = list(fill = default_base_color)),
+  list(geom = "col", new = list(fill = default_base_color)),
+  list(geom = "dotplot", new = list(fill = default_base_color)),
+  # Special geoms.
+  list(geom = "boxplot", new = list(fill = default_base_color, colour = default_base_color, alpha = .7)),
+  list(geom = "smooth", new = list(fill = default_base_color, colour = default_base_color, alpha = .7)),
+  list(geom = "dotplot", new = list(colour = default_base_color, fill = default_base_color))
+)
+a <- lapply(X = new_geom_defaults, FUN = function(list) do.call(what = ggplot2::update_geom_defaults, args = list))
+
+# Set default scales
+discrete_colors <- c("#3D6CE8", "#EA619D", "#EACF61", "#86C7EC", "#86ECCB")
+scale_colour_continuous <- function(...) ggplot2::scale_colour_viridis_c(..., option = "magma")
+scale_colour_discrete <- function(...) ggplot2::scale_colour_manual(..., values = discrete_colors)
+scale_fill_continuous <- function(...) ggplot2::scale_fill_viridis_c(..., option = "magma")
+scale_fill_discrete <- function(...) ggplot2::scale_fill_manual(..., values = discrete_colors)
+```
+
+# Introduction
+
+# Proportion estimation
+
+The section is taken from the [first part](https://relaxed-beaver-4b4dc8.netlify.com/exercises_part1.html) of Rasmus Bååth's talk at user!2019.
+
+We want to estimate the proportion of clicks an ad campaign will generate. 
+
+Our estimation will follow a 3-steps process:
+
+* build a generative model based on a set of parameters,
+* set up a prior which represents the uncertainty about the value of the parameters of the generative model,
+* gather data to help defined the posterior distribution of the parameters of the generative model.
+
+The idea is to have a generative model to create data representing the data we want to predict. The distribution of these parameters is what we want to know. At first a prior distribution is given based on initial information -the prior can be uninformative e.g. uniform distribtuion on all possible values-. Based on observed data, the parameter distribution is updated to become the posterior distribution. Things can be written as the following: 
+
+$$
+Posterior \propto Prior \times Likelihood
+$$
+It is the traduction of the Bayes theorem
+
+$$
+P(P \mid D) = \frac{P(D \mid P) \, P(P)}{P(D)}
+$$
+Where 
+
+* $P(P \mid D)$ is the posterior distribtuion of the parameters, $P$, knowing the observed data, $D$
+* $P(D \mid P)$ is the likelihood of observing data $D$ knowing parameters $P$
+* $P(P)$ is the prior distribution of the parameters $P$
+
+## The frequentist way
+
+Before going into details on how we can answer the quetion using bayesian data analysis, let's see how a frequentist would answer the question. 
+
+The proportion of clicks would be estimated simply by counting the number of clicks in an experiment. Let's say $100$ ads have already been shown and $9$ clicks were observed, then the estimated proportion of clicks $\hat{p}$ is simply $\frac{9}{100} = 0.09$. 
+
+A confidence interval can be computed as follows, $CI = 1.96 \times \sqrt{\frac{\hat{p}(1-\hat{p})}{n}}$ where $n$ is the size of the population, here $100$ and $1.96$ corresponds to the percentile at level $95\%$ of a normal distribution. 
+
+Some precision about this normal distribution, we are referencing here the distribution of $\hat{p}$ which can be viewed as the mean of $n$ results, 1 or 0, from a Bernouilli experiment. From the Theorem Central Limit we have that $\hat{p}$ can be approached by a normal distribution. 
+
+```{r conf-int}
+p_hat <- 0.09
+n <- 100
+conf <- 0.05
+z <- quantile(rnorm(100000), probs = 1 - conf/2)
+ci_low <- p_hat - z * sqrt((p_hat * (1 - p_hat)) / n)
+ci_low <- round(ci_low, digits = 3)
+ci_high <- p_hat + z * sqrt((p_hat * (1 - p_hat)) / n)
+ci_high <- round(ci_high, digits = 3)
+```
+
+Here our 95% confidence interval is [`r ci_low`;`r ci_high`].
+
+If we want to know the probability of having more than 5 clicks we can use the cumulative binomial distribution. In our case we'll compute $1-\sum_{i=0}^{5}Binom(i, 100, \hat{p})$ where $Binom(i, 100, \hat{p})$ is the probability of having $i$ ads clicked over 100 shown. In our case there is a `r round(pbinom(5 - 1, 100, p_hat, lower.tail = FALSE), digits = 3)` probability that 100 ads lead to at least 5 clicks.
+
+## The generative model
+
+Let's build a generative model that outputs a number of clicks out of a certain number of ads shown. Without any other information or data than the fact that an ad is shown, using a [binomial distribution](https://en.wikipedia.org/wiki/Binomial_distribution) seems to be a good start. We need to specify 2 parameters for the binomial distribution: the number of experiments $n$  and the proportion of successes $p$. Let's generate the number of clicks obtained out of 100 ads for a thousand experiments. We fix $p = 0.1$. 
+
+```{r gen_model}
+# Generate 1000 values of number of clicks out of 100 ads shown
+n_samples <- 1000000
+n_ads_shown <- 100
+proportion_clicks <- 0.1
+n_clicks <- rbinom(n_samples, size = n_ads_shown, prob = proportion_clicks)
+```
+
+```{r n_clicks_distrib, echo = FALSE}
+ggplot(
+  data = data.frame(n_clicks),
+  mapping = aes(x = n_clicks)
+) + 
+  geom_histogram(
+    binwidth = 1,
+    alpha = .7,
+    color = rgb(73, 139, 245, maxColorValue = 255)
+  ) + 
+  labs(
+    x = "Number of clicks",
+    y = "Frequency",
+    title = "Distribution of the number of clicks \nout of 100 ads shown."
+  )
+```
+
+Here we see the distribution of the number of clicks obtained after showing 100 ads based on our generative model. Remember we set the probability of succes to 0.1 and obviously our distribution is centered around 10. 
+
+Questions like what is the probability that our ad campaign results in at least 5 clicks every 100 ads shown, can now be easily answered. We simply count the number of samples with more than 5 clicks `mean(n_clicks >= 5)`. The result is `r round(mean(n_clicks >= 5), digits = 3)`. If $p$ is fixed at $0.09$ then of course we obtain the same result as with the frequentist approach (`r round(mean(rbinom(n_samples, size = n_ads_shown, prob = 0.09) >= 5), digits = 3)`).
+
+
+## The prior uncertainty
+
+So far we used $p=0.1$ as the probability of an add being clicked. We did not give any reason as to why we choose this value and it was because there was none. Instead of giving a fixed value to this parameter we can use a probability disribution. As we do not have much information we'll use a uniform distribution over $\left[0,1\right]$. This transcripts the fact that we consider that the probability of clicks is somewhere between 0% and 20% and could as likely be 0% as it could be 0.05% or 0.17%.
+
+```{r prior_distrib}
+# Uniform distribution over [0, 1]
+proportion_clicks <- runif(n_samples, 0, 1)
+```
+
+The vector *proportion_clicks* has as many values as the size of the sample vector of *n_clicks*. This way a different probability is used to create each number of clicks. The new distribution of clicks is as follows.
+
+```{r gen_model_prior}
+# Generate 1000 values of number of clicks out of 100 ads shown
+n_clicks <- rbinom(n_samples, size = n_ads_shown, prob = proportion_clicks)
+```
+
+```{r n_clicks_distrib_prior, echo = FALSE}
+ggplot(
+  data = data.frame(n_clicks),
+  mapping = aes(x = n_clicks)
+) + 
+  geom_histogram(
+    binwidth = 1,
+    alpha = .7,
+    color = rgb(73, 139, 245, maxColorValue = 255)
+  ) + 
+  labs(
+    x = "Number of clicks",
+    y = "Frequency",
+    title = "Distribution of the number of clicks \nout of 100 ads shown.",
+    subtitle = "A prior is added."
+  )
+```
+
+Note the difference with the previous distribution of the number of clicks. It is not centered around 10 anymore. This is due to the fact that we added a probability distribtuion over $p$. Likewise the probability to get at least 5 clicks has changed: `r round(mean(n_clicks >= 5), digits = 3)`.
+
+We can visualise the joint probability distribution of number of clicks relative to the proportion of click.
+
+```{r joint_distrib, echo = FALSE}
+ggplot(
+  data = data.frame(n_clicks, proportion_clicks),
+  mapping = aes(x = proportion_clicks, y = n_clicks)
+) +
+  geom_point(
+    binwidth = 1,
+    fill = rgb(73, 139, 245, maxColorValue = 255),
+    alpha = .5
+  ) + 
+  labs(
+    x = "Click rate",
+    y = "Number of clicks",
+    title = "Joint probability distribution of the click rate \nand the number of clicks."
+  )
+```
+
+Of course, as the probabilty of success increases, the number of clicks obtained also increases.
+
+```{r prior_distrib2, out.width="100%"}
+# Uniform distribution over [0, 0.2]
+proportion_clicks <- runif(n_samples, 0, .2)
+# Generate 1000 values of number of clicks out of 100 ads shown
+n_clicks <- rbinom(n_samples, size = n_ads_shown, prob = proportion_clicks)
+# p1 <- ggplot(
+#   data = data.frame(n_clicks),
+#   mapping = aes(x = n_clicks)
+# ) +
+#   geom_histogram(
+#     binwidth = 1,
+#     alpha = .7,
+#     color = rgb(73, 139, 245, maxColorValue = 255)
+#   ) +
+#   labs(
+#     x = "Number of clicks",
+#     y = "Frequency",
+#     title = "Distribution of the number of clicks \nout of 100 ads shown.",
+#     subtitle = "A prior is added."
+#   )
+# p2 <- ggplot(
+#   data = data.frame(n_clicks, proportion_clicks),
+#   mapping = aes(x = proportion_clicks, y = n_clicks)
+# ) +
+#   geom_point(
+#     binwidth = 1,
+#     fill = rgb(73, 139, 245, maxColorValue = 255),
+#     alpha = .5
+#   ) +
+#   labs(
+#     x = "Click rate",
+#     y = "Number of clicks",
+#     title = "Joint probability distribution of the click rate \nand the number of clicks."
+#   )
+# grid.arrange(p1, p2, ncol = 2)
+```
+
+Another prior would give different results. As an example if we set the prior to be uniform over $\left[0,0.2\right]$, the probability to have at least 5 clicks is now `r round(mean(n_clicks >= 5), digits = 3)`
+
+## The posterior distribution
+
+We now have a generative model based on a prior on the parameter $p$. Our goal is to obtain the posterior distribution of the number of clicks. To do so we only need some data to update our belief (the prior) using our generative model. Suppose that a $100$ ads were shown and $9$ clicks were obtained, how is our prior distribution updated?
+
+The posterior distribution is obtained from the joint probability distribution knowing that the observed number of clicks is $9$.
+
+```{r posterior}
+proportion_clicks <- runif(n_samples, 0, 1)
+n_clicks <- rbinom(n_samples, size = n_ads_shown, prob = proportion_clicks)
+prior <- data.frame(proportion_clicks, n_clicks)
+posterior <- prior[prior$n_clicks == 9, ]
+```
+
+```{r posterior_distrib, echo = FALSE, fig.height = 4}
+p1 <- ggplot(
+  data = data.frame(proportion_clicks),
+  mapping = aes(x = proportion_clicks)
+) + 
+  geom_histogram( 
+    bins = 50,
+    alpha = .7,
+    color = rgb(73, 139, 245, maxColorValue = 255)
+  ) + 
+  labs(
+    x = "Click rate",
+    y = "Frenquency",
+    title = "Prior"
+  )
+p2 <- ggplot(
+  data = posterior,
+  mapping = aes(x = proportion_clicks)
+) + 
+  geom_histogram(
+    bins = 50,
+    alpha = .7,
+    color = rgb(73, 139, 245, maxColorValue = 255)
+  ) + 
+  labs(
+    x = "Click rate",
+    y = "Frequency",
+    title = "Posterior"
+  )
+grid.arrange(p1, p2, ncol = 2)
+```
+
+Here we have the prior distribution and the posterior distribution of the click rate. Our initial belif is updated and the posterior probabilty is now centered around `r round(mean(posterior$proportion_clicks), digits = 3)`.
+
+With the posterior distribution of the click rate we can have an estimate and a confidence interval. The median is `r round(median(posterior$proportion_clicks), digits = 3)` and the 95% confidence is $\left[`r round(quantile(posterior$proportion_clicks, 0.025), digits = 3)`, `r round(quantile(posterior$proportion_clicks, 0.975), digits = 3)`\right]$
+
+```{r posterior2}
+proportion_clicks <- runif(n_samples, 0, .2)
+n_clicks <- rbinom(n_samples, size = n_ads_shown, prob = proportion_clicks)
+prior <- data.frame(proportion_clicks, n_clicks)
+posterior <- prior[prior$n_clicks == 9, ]
+```
+
+
+With a different prior ($\left[0,0.2\right]$) we have a different posterior and different results: median is now `r round(median(posterior$proportion_clicks), digits = 3)` and CI is $\left[`r round(quantile(posterior$proportion_clicks, 0.025), digits = 3)`, `r round(quantile(posterior$proportion_clicks, 0.975), digits = 3)`\right]$.
+
+# Comparison of means
+
+The goal is to decide wether the group $A$ has higher values for variable $x$ than group $B$. As before we will first briefly describe the frequentist approach and then we will see how things can be done using bayesian data analysis.
+
+## The frequentist way
+
+Comparing means is a well addressed subject and one can find many detailled tutorials, articles, blog posts explaining how to do it the proper way ([this blog post](http://www.sthda.com/english/wiki/comparing-means-in-r) gives a decent overview). Basically you have 4 cases: paired or unpaired examples and parametric or non-parametric tests. 
+
+* Unpaired samples parametric: t-test
+* Unpaired samples non-parametric: Wilcoxon
+* Paired samples parametric: t-test
+* Paired samples non-parametric: Wilcoxon
+
+Although the same tests are used for paired and unpaired samples, the test itself is actually quite different. In the former case the test is performed on the difference of values between each pairs whereas in the latter case the actual values are compared. 
+
+## The bayesian way
+
+
+
+<br>
+
+<cite> -- Mathieu Marauri</cite>
